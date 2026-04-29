@@ -1,12 +1,13 @@
 
 import axios from "axios";
+import { getAuthToken } from "./auth";
 
 const api = axios.create({
   baseURL: "http://localhost:5000",
 });
 
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem("token");
+  const token = getAuthToken();
   if (token) {
     config.headers = config.headers || {};
     config.headers.Authorization = token;
@@ -35,6 +36,10 @@ export function getApiErrorMessage(
   }
 
   return fallback;
+}
+
+export function isUnauthorizedError(error: unknown) {
+  return axios.isAxiosError(error) && error.response?.status === 401;
 }
 
 export default api;

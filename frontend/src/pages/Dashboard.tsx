@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import api, { getApiErrorMessage } from "../api";
+import { useNavigate } from "react-router-dom";
+import api, { getApiErrorMessage, isUnauthorizedError } from "../api";
+import { clearAuthToken } from "../auth";
 import CustomerForm, { CustomerFormValues } from "../components/CustomerForm";
 import NotificationBanner from "../components/NotificationBanner";
 import styles from "./Dashboard.module.css";
@@ -11,7 +13,27 @@ interface Customer {
   phone: string;
 }
 
+interface CustomerListResponse {
+  items: Customer[];
+  pagination: {
+    page: number;
+    limit: number;
+    totalItems: number;
+    totalPages: number;
+    hasPreviousPage: boolean;
+    hasNextPage: boolean;
+  };
+  summary: {
+    totalCustomers: number;
+    emailReady: number;
+    phoneReady: number;
+  };
+}
+
+const PAGE_SIZE = 10;
+
 export default function Dashboard() {
+  const navigate = useNavigate();
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [pageError, setPageError] = useState("");
@@ -19,15 +41,47 @@ export default function Dashboard() {
     message: string;
     tone: "success" | "error";
   } | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pagination, setPagination] = useState({
+    page: 1,
+    limit: PAGE_SIZE,
+    totalItems: 0,
+    totalPages: 1,
+    hasPreviousPage: false,
+    hasNextPage: false,
+  });
+  const [summary, setSummary] = useState({
+    totalCustomers: 0,
+    emailReady: 0,
+    phoneReady: 0,
+  });
   const [isDeletingId, setIsDeletingId] = useState<number | null>(null);
 
-  const load = useCallback(async () => {
+  const logout = useCallback(() => {
+    clearAuthToken();
+    navigate("/", { replace: true });
+  }, [navigate]);
+
+  const load = useCallback(async (page = currentPage) => {
     setPageError("");
 
     try {
-      const res = await api.get<Customer[]>("/customers");
-      setCustomers(res.data);
+      const res = await api.get<CustomerListResponse>("/customers", {
+        params: {
+          page,
+          limit: PAGE_SIZE,
+        },
+      });
+      setCustomers(res.data.items);
+      setPagination(res.data.pagination);
+      setSummary(res.data.summary);
+      setCurrentPage(res.data.pagination.page);
     } catch (error: unknown) {
+      if (isUnauthorizedError(error)) {
+        logout();
+        return;
+      }
+
       const message = getApiErrorMessage(
         error,
         "We couldn't load customers right now. Please refresh and try again."
@@ -37,20 +91,26 @@ export default function Dashboard() {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [currentPage, logout]);
 
   const add = useCallback(
     async (formData: CustomerFormValues) => {
       setPageError("");
+      setIsLoading(true);
 
       try {
         await api.post("/customers", formData);
-        await load();
+        await load(1);
         setNotification({
           message: "Customer created successfully.",
           tone: "success",
         });
       } catch (error: unknown) {
+        if (isUnauthorizedError(error)) {
+          logout();
+          return;
+        }
+
         const message = getApiErrorMessage(
           error,
           "We couldn't create that customer right now. Please try again."
@@ -58,9 +118,11 @@ export default function Dashboard() {
         setPageError(message);
         setNotification({ message, tone: "error" });
         throw error;
+      } finally {
+        setIsLoading(false);
       }
     },
-    [load]
+    [load, logout]
   );
 
   const remove = useCallback(
@@ -70,12 +132,19 @@ export default function Dashboard() {
 
       try {
         await api.delete(`/customers/${id}`);
-        await load();
+        const nextPage =
+          customers.length === 1 && currentPage > 1 ? currentPage - 1 : currentPage;
+        await load(nextPage);
         setNotification({
           message: "Customer deleted successfully.",
           tone: "success",
         });
       } catch (error: unknown) {
+        if (isUnauthorizedError(error)) {
+          logout();
+          return;
+        }
+
         const message = getApiErrorMessage(
           error,
           "We couldn't delete that customer right now. Please try again."
@@ -86,12 +155,12 @@ export default function Dashboard() {
         setIsDeletingId(null);
       }
     },
-    [load]
+    [currentPage, customers.length, load, logout]
   );
 
   useEffect(() => {
-    load();
-  }, [load]);
+    load(currentPage);
+  }, [currentPage, load]);
 
   useEffect(() => {
     if (!notification) {
@@ -100,32 +169,45 @@ export default function Dashboard() {
 
     const timeoutId = window.setTimeout(() => {
       setNotification(null);
-    }, 2600);
+    }, 5000);
 
     return () => window.clearTimeout(timeoutId);
   }, [notification]);
 
   const stats = useMemo(
     () => ({
-      totalCustomers: customers.length,
-      companyEmails: customers.filter((customer) =>
-        customer.email.toLowerCase().includes("@")
-      ).length,
-      phoneReadyContacts: customers.filter((customer) => customer.phone.trim()).length,
+      totalCustomers: summary.totalCustomers,
+      companyEmails: summary.emailReady,
+      phoneReadyContacts: summary.phoneReady,
     }),
-    [customers]
+    [summary]
   );
+
+  const changePage = useCallback((page: number) => {
+    if (page === currentPage || page < 1 || page > pagination.totalPages) {
+      return;
+    }
+
+    setIsLoading(true);
+    setCurrentPage(page);
+  }, [currentPage, pagination.totalPages]);
 
   return (
     <main className={styles.pageShell}>
       <section className={styles.heroSection}>
-        <div className={styles.heroCopy}>
-          <span className={styles.eyebrow}>Support dashboard</span>
-          <h1>Customer contact management with a calmer workflow.</h1>
-          <p>
-            Add new contacts quickly, keep your support roster organized, and
-            maintain a clearer view of the people your team needs to follow up with.
-          </p>
+        <div className={styles.heroTopBar}>
+          <div className={styles.heroCopy}>
+            <span className={styles.eyebrow}>Support dashboard</span>
+            <h1>Customer contact management with a calmer workflow.</h1>
+            <p>
+              Add new contacts quickly, keep your support roster organized, and
+              maintain a clearer view of the people your team needs to follow up with.
+            </p>
+          </div>
+
+          <button className={styles.logoutButton} onClick={logout}>
+            Log out
+          </button>
         </div>
 
         <div className={styles.statGrid}>
@@ -159,15 +241,6 @@ export default function Dashboard() {
             <p>Review, manage, and clean up your customer records from one place.</p>
           </div>
 
-          {notification ? (
-            <div className={styles.notificationWrap}>
-              <NotificationBanner
-                message={notification.message}
-                tone={notification.tone}
-              />
-            </div>
-          ) : null}
-
           {pageError ? <p className={styles.pageError}>{pageError}</p> : null}
 
           {isLoading ? (
@@ -184,40 +257,102 @@ export default function Dashboard() {
               </p>
             </div>
           ) : (
-            <div className={styles.tableWrap}>
-              <table className={styles.table}>
-                <thead>
-                  <tr>
-                    <th>Name</th>
-                    <th>Email</th>
-                    <th>Phone</th>
-                    <th>Action</th>
-                  </tr>
-                </thead>
-
-                <tbody>
-                  {customers.map((customer) => (
-                    <tr key={customer.id}>
-                      <td>{customer.name}</td>
-                      <td>{customer.email}</td>
-                      <td>{customer.phone}</td>
-                      <td>
-                        <button
-                          className={styles.deleteButton}
-                          onClick={() => remove(customer.id)}
-                          disabled={isDeletingId === customer.id}
-                        >
-                          {isDeletingId === customer.id ? "Deleting..." : "Delete"}
-                        </button>
-                      </td>
+            <>
+              <div className={styles.tableWrap}>
+                <table className={styles.table}>
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th>Email</th>
+                      <th>Phone</th>
+                      <th>Action</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+
+                  <tbody>
+                    {customers.map((customer) => (
+                      <tr key={customer.id}>
+                        <td>{customer.name}</td>
+                        <td>{customer.email}</td>
+                        <td>{customer.phone}</td>
+                        <td>
+                          <button
+                            className={styles.deleteButton}
+                            onClick={() => remove(customer.id)}
+                            disabled={isDeletingId === customer.id}
+                          >
+                            {isDeletingId === customer.id ? "Deleting..." : "Delete"}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className={styles.mobileCardList}>
+                {customers.map((customer) => (
+                  <article key={customer.id} className={styles.mobileCard}>
+                    <div className={styles.mobileCardRow}>
+                      <span className={styles.mobileLabel}>Name</span>
+                      <strong>{customer.name}</strong>
+                    </div>
+
+                    <div className={styles.mobileCardRow}>
+                      <span className={styles.mobileLabel}>Email</span>
+                      <p>{customer.email}</p>
+                    </div>
+
+                    <div className={styles.mobileCardRow}>
+                      <span className={styles.mobileLabel}>Phone</span>
+                      <p>{customer.phone}</p>
+                    </div>
+
+                    <button
+                      className={styles.deleteButton}
+                      onClick={() => remove(customer.id)}
+                      disabled={isDeletingId === customer.id}
+                    >
+                      {isDeletingId === customer.id ? "Deleting..." : "Delete"}
+                    </button>
+                  </article>
+                ))}
+              </div>
+            </>
           )}
+
+          {!isLoading && pagination.totalPages > 1 ? (
+            <div className={styles.paginationBar}>
+              <button
+                className={styles.paginationButton}
+                onClick={() => changePage(currentPage - 1)}
+                disabled={!pagination.hasPreviousPage}
+              >
+                Previous
+              </button>
+
+              <p className={styles.paginationStatus}>
+                Page {pagination.page} of {pagination.totalPages}
+              </p>
+
+              <button
+                className={styles.paginationButton}
+                onClick={() => changePage(currentPage + 1)}
+                disabled={!pagination.hasNextPage}
+              >
+                Next
+              </button>
+            </div>
+          ) : null}
         </section>
       </section>
+
+      {notification ? (
+        <NotificationBanner
+          message={notification.message}
+          tone={notification.tone}
+        />
+      ) : null}
     </main>
   );
 }

@@ -2,6 +2,7 @@ import { useCallback, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useForm } from "react-hook-form";
 import api, { getApiErrorMessage } from "../api";
+import { setAuthToken } from "../auth";
 import NotificationBanner from "../components/NotificationBanner";
 import styles from "./Login.module.css";
 
@@ -32,7 +33,7 @@ export default function Login() {
 
       try {
         const res = await api.post("/auth/login", data);
-        localStorage.setItem("token", res.data.token);
+        setAuthToken(res.data.token);
         navigate("/dashboard");
       } catch (error: unknown) {
         setServerError(
