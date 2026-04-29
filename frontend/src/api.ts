@@ -3,7 +3,7 @@ import axios from "axios";
 import { getAuthToken } from "./auth";
 
 const api = axios.create({
-  baseURL: "http://localhost:5000",
+  baseURL: "https://customer-manage-site.onrender.com",
 });
 
 api.interceptors.request.use((config) => {
