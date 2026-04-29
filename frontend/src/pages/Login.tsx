@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useForm } from "react-hook-form";
-import api from "../api";
+import api, { getApiErrorMessage } from "../api";
+import NotificationBanner from "../components/NotificationBanner";
 import styles from "./Login.module.css";
 
 interface LoginData {
@@ -24,22 +25,25 @@ export default function Login() {
     },
   });
 
-  const login = async (data: LoginData) => {
-    setServerError("");
-    setIsSubmitting(true);
+  const login = useCallback(
+    async (data: LoginData) => {
+      setServerError("");
+      setIsSubmitting(true);
 
-    try {
-      const res = await api.post("/auth/login", data);
-      localStorage.setItem("token", res.data.token);
-      navigate("/dashboard");
-    } catch (error: any) {
-      setServerError(
-        error?.response?.data?.msg || "Unable to log in right now. Please try again."
-      );
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
+      try {
+        const res = await api.post("/auth/login", data);
+        localStorage.setItem("token", res.data.token);
+        navigate("/dashboard");
+      } catch (error: unknown) {
+        setServerError(
+          getApiErrorMessage(error, "Unable to log in right now. Please try again.")
+        );
+      } finally {
+        setIsSubmitting(false);
+      }
+    },
+    [navigate]
+  );
 
   return (
     <main className={styles.pageShell}>
@@ -105,7 +109,9 @@ export default function Login() {
               ) : null}
             </label>
 
-            {serverError ? <p className={styles.serverError}>{serverError}</p> : null}
+            {serverError ? (
+              <NotificationBanner message={serverError} tone="error" />
+            ) : null}
 
             <button className={styles.button} type="submit" disabled={isSubmitting}>
               {isSubmitting ? "Signing in..." : "Log in"}

@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useForm } from "react-hook-form";
-import api from "../api";
+import api, { getApiErrorMessage } from "../api";
+import NotificationBanner from "../components/NotificationBanner";
 import styles from "./Register.module.css";
 
 interface RegisterData {
@@ -12,6 +13,7 @@ interface RegisterData {
 
 export default function Register() {
   const navigate = useNavigate();
+  const redirectTimeoutRef = useRef<number | null>(null);
   const [serverError, setServerError] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -31,29 +33,48 @@ export default function Register() {
   });
 
   const passwordValue = watch("password");
+  const confirmPasswordRules = useMemo(
+    () => ({
+      required: "Please confirm your password",
+      validate: (value: string) =>
+        value === passwordValue || "Passwords do not match",
+    }),
+    [passwordValue]
+  );
 
-  const registerUser = async (data: RegisterData & { confirmPassword: string }) => {
-    setServerError("");
-    setSuccessMessage("");
-    setIsSubmitting(true);
+  const registerUser = useCallback(
+    async (data: RegisterData & { confirmPassword: string }) => {
+      setServerError("");
+      setSuccessMessage("");
+      setIsSubmitting(true);
 
-    try {
-      await api.post("/auth/register", {
-        email: data.email,
-        password: data.password,
-        userName: data.userName,
-      });
-      setSuccessMessage("Registration successful. Redirecting you to login...");
-      reset();
-      setTimeout(() => navigate("/"), 1200);
-    } catch (error: any) {
-      setServerError(
-        error?.response?.data?.msg || "Unable to register right now. Please try again."
-      );
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
+      try {
+        await api.post("/auth/register", {
+          email: data.email,
+          password: data.password,
+          userName: data.userName,
+        });
+        setSuccessMessage("Registration successful. Redirecting you to login...");
+        reset();
+        redirectTimeoutRef.current = window.setTimeout(() => navigate("/"), 1200);
+      } catch (error: unknown) {
+        setServerError(
+          getApiErrorMessage(error, "Unable to register right now. Please try again.")
+        );
+      } finally {
+        setIsSubmitting(false);
+      }
+    },
+    [navigate, reset]
+  );
+
+  useEffect(() => {
+    return () => {
+      if (redirectTimeoutRef.current) {
+        window.clearTimeout(redirectTimeoutRef.current);
+      }
+    };
+  }, []);
 
   return (
     <main className={styles.pageShell}>
@@ -144,11 +165,7 @@ export default function Register() {
                 className={styles.input}
                 type="password"
                 placeholder="Re-enter your password"
-                {...register("confirmPassword", {
-                  required: "Please confirm your password",
-                  validate: (value) =>
-                    value === passwordValue || "Passwords do not match",
-                })}
+                {...register("confirmPassword", confirmPasswordRules)}
               />
               {errors.confirmPassword ? (
                 <small className={styles.errorText}>
@@ -157,8 +174,12 @@ export default function Register() {
               ) : null}
             </label>
 
-            {serverError ? <p className={styles.serverError}>{serverError}</p> : null}
-            {successMessage ? <p className={styles.successText}>{successMessage}</p> : null}
+            {serverError ? (
+              <NotificationBanner message={serverError} tone="error" />
+            ) : null}
+            {successMessage ? (
+              <NotificationBanner message={successMessage} tone="success" />
+            ) : null}
 
             <button className={styles.button} type="submit" disabled={isSubmitting}>
               {isSubmitting ? "Creating account..." : "Create account"}
